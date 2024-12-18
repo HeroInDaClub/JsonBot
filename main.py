@@ -4,9 +4,10 @@ import telebot
 from telebot import types
 import os
 from io import BytesIO
+import ijson  # Добавлено для потокового парсинга большого JSON
 
 # TOKEN вашего бота
-token = "7902339805:AAHABOA6Q-gYhzB6fl5CZEdHgiWWx2zwFBM"
+token = "ВАШ_ТОКЕН"
 
 bot = telebot.TeleBot(token)
 
@@ -60,7 +61,6 @@ def bot_message(message):
     if state == STATE_NONE:
         if text == 'Из Excel в Json':
             user_states[user_id] = STATE_EXCEL_TO_JSON_WAIT_FILE
-            # Скрываем предыдущее меню и показываем кнопку "Вернуться в меню"
             bot.send_message(user_id, "Отправь мне Excel файл (формат .xlsx).", reply_markup=types.ReplyKeyboardRemove())
             show_return_menu_button(user_id, "Ожидаю Excel файл...")
         elif text == 'Из Json в Excel':
@@ -75,11 +75,11 @@ def bot_message(message):
         bot.send_message(user_id, "Отправьте файл Excel (.xlsx).")
 
     elif state == STATE_EXCEL_TO_JSON_CHOOSE_SHEET:
-        # Ожидаем нажатия кнопки-инлайн с листом, пользователь отправил текст
+        # Ожидаем нажатия кнопки-инлайн с листом
         bot.send_message(user_id, "Выберите лист из предложенных кнопок.")
 
     elif state == STATE_EXCEL_TO_JSON_WAIT_COLUMN:
-        # Ожидаем выбор столбца кнопками, пользователь отправил текст
+        # Ожидаем выбор столбца
         bot.send_message(user_id, "Выберите столбец из предложенных кнопок.")
 
     elif state == STATE_EXCEL_TO_JSON_WAIT_START_ROW:
@@ -95,6 +95,9 @@ def bot_message(message):
         excel_bytes = user_data[user_id]['excel_bytes']
         chosen_sheet = user_data[user_id]['chosen_sheet']
         chosen_column = user_data[user_id]['chosen_column']
+
+        # Сообщаем о начале обработки
+        bot.send_message(user_id, "Обрабатывается, пожалуйста подождите...")
 
         try:
             df = pd.read_excel(BytesIO(excel_bytes), sheet_name=chosen_sheet, header=None)
@@ -141,9 +144,11 @@ def handle_docs(message):
             bot.send_message(user_id, "Пожалуйста, отправьте файл в формате .xlsx")
             return
 
+        # Сообщаем о начале обработки
+        bot.send_message(user_id, "Обрабатывается, пожалуйста подождите...")
+
         # Сохраняем файл в память
         try:
-            # Пробуем открыть его через pandas
             xls = pd.ExcelFile(BytesIO(downloaded_file))
             sheets = xls.sheet_names
             user_data[user_id]['excel_bytes'] = downloaded_file
@@ -165,26 +170,32 @@ def handle_docs(message):
             bot.send_message(user_id, "Пожалуйста, отправьте файл в формате .json")
             return
 
-        try:
-            data = json.loads(downloaded_file.decode('utf-8'))
-        except Exception as e:
-            bot.send_message(user_id, f"Ошибка при чтении JSON: {e}")
-            return
+        # Сообщаем о начале обработки
+        bot.send_message(user_id, "Обрабатывается, пожалуйста подождите...")
 
-        # Конвертируем JSON в Excel
+        # Теперь не загружаем весь JSON в память, а парсим потоково
         try:
-            if isinstance(data, dict):
-                data = list(data.items())
-            elif not isinstance(data, list):
-                data = [data]
-
-            df = pd.DataFrame(data)
-            df_str = df.astype(str)
-            one_col = df_str.apply(lambda x: ', '.join(x), axis=1)
-            final_df = pd.DataFrame(one_col, columns=["Data"])
+            # Используем ijson для построчного чтения JSON (предполагаем, что это массив)
+            f = BytesIO(downloaded_file)
+            f.seek(0)
+            # ijson.items(f, 'item') предполагает, что в корне JSON - массив.
+            # Если структура иная - нужно адаптировать.
+            items = ijson.items(f, 'item')
 
             output_io = BytesIO()
-            final_df.to_excel(output_io, index=False)
+            # Создаем Excel-файл построчно
+            writer = pd.ExcelWriter(output_io, engine='xlsxwriter')
+            workbook = writer.book
+            worksheet = workbook.add_worksheet('Data')
+
+            row = 0
+            for item in items:
+                # Каждую запись превращаем в строку JSON и пишем в одну колонку
+                # Можно модифицировать, чтобы раскладывать по столбцам, если известно, что item - dict.
+                worksheet.write(row, 0, json.dumps(item, ensure_ascii=False))
+                row += 1
+
+            workbook.close()
             output_io.seek(0)
 
             bot.send_document(user_id, output_io, visible_file_name='converted.xlsx', caption="Вот ваш Excel файл")
@@ -193,9 +204,6 @@ def handle_docs(message):
             user_states[user_id] = STATE_NONE
             user_data[user_id] = {}
             show_main_menu(user_id)
-
-            user_states[user_id] = STATE_NONE
-            user_data[user_id] = {}
 
         except Exception as e:
             bot.send_message(user_id, f"Ошибка при обработке JSON: {e}")
@@ -256,6 +264,5 @@ def callback_choose_column(call):
 
         bot.send_message(user_id, "С какой строки начинаем сбор данных?")
         user_states[user_id] = STATE_EXCEL_TO_JSON_WAIT_START_ROW
-
 
 bot.polling(non_stop=True)
