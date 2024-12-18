@@ -7,7 +7,7 @@ from io import BytesIO
 import ijson  # Добавлено для потокового парсинга большого JSON
 
 # TOKEN вашего бота
-token = "ВАШ_ТОКЕН"
+token = "7902339805:AAHABOA6Q-gYhzB6fl5CZEdHgiWWx2zwFBM"
 
 bot = telebot.TeleBot(token)
 
